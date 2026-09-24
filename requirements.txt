@@ -1,0 +1,12 @@
+yfinance
+pandas
+numpy
+matplotlib
+seaborn
+scikit-learn
+finrl
+stockstats
+gym
+stable-baselines3
+sb3_contrib
+torch 
