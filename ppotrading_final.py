@@ -11,7 +11,7 @@ from stable_baselines3.common.callbacks import EvalCallback
 from sb3_contrib.common.recurrent.policies import RecurrentActorCriticPolicy
 from sb3_contrib import RecurrentPPO
 
-from trading_env import DiscreteTradingEnvironment
+from trading_environments import DiscreteTradingEnvironment
 
 
 np.random.seed(0)

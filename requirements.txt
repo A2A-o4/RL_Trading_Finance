@@ -6,7 +6,7 @@ seaborn
 scikit-learn
 finrl
 stockstats
-gym
+gymnasium
 stable-baselines3
 sb3_contrib
 torch 
