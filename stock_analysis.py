@@ -3,7 +3,6 @@ import pandas as pd
 import numpy as np
 import matplotlib.pyplot as plt
 import seaborn as sns
-from sklearn.preprocessing import MinMaxScaler
 import warnings
 warnings.filterwarnings('ignore')
 
@@ -47,19 +46,11 @@ print(missing_values)
 # Handle missing data - Forward fill
 if missing_values.sum() > 0:
     print("Handling missing values with forward fill method...")
-    data = data.fillna(method='ffill')
+    data = data.ffill()
     # For any remaining NaN values at the beginning, fill with backfill
-    data = data.fillna(method='bfill')
+    data = data.bfill()
     print("Missing values after handling:")
     print(data.isnull().sum())
-
-# Feature Scaling
-print("\nApplying feature scaling...")
-scaler = MinMaxScaler()
-# Get all columns for scaling
-cols_to_scale = list(data.columns)
-data_scaled = data.copy()
-data_scaled.loc[:, cols_to_scale] = scaler.fit_transform(data[cols_to_scale])
 
 # Add Technical Indicators using stockstats
 print("\nAdding technical indicators using stockstats...")

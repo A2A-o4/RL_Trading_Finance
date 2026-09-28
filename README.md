@@ -9,6 +9,10 @@ The agents are built with [Stable-Baselines3](https://stable-baselines3.readthed
 > and the exact train/test data are included, and their test results are reproduced below with
 > `evaluate_saved_models.py`. **Headline:** the Recurrent PPO agent made **+12.4% with a Sharpe ratio of
 > 1.21 and a 3.0% max drawdown** on 2023-2024, but **did not beat simply holding AAPL (+65%)**.
+>
+> **Environment fix (September 2026):** two bugs were found in the original environment and fixed (see
+> [Environment fixes](#environment-fixes)). The saved agents were trained before the fix, so the results
+> below come from the original environment; the agents still need to be retrained in the fixed one.
 
 ## Overview
 
@@ -46,10 +50,29 @@ Both environments live in `trading_environments.py` and share a common abstract 
 | | Discrete | Continuous |
 |---|---|---|
 | **Actions** | `0` hold, `1` buy, `2` sell (fixed trade size) | value in `[-1, 1]`: fraction of cash to invest (> 0) or of shares to sell (< 0) |
-| **Observation** | last 30 days of prices, volume and indicators, plus cash balance and shares held | same |
-| **Reward** | change in total portfolio value (cash + shares × price) at each step | same |
+| **Observation** | last 30 days of prices, volume and indicators (min-max normalised over the window), plus cash balance and shares held | same |
+| **Execution** | trade at the last observed close | same |
+| **Reward** | change in total portfolio value (cash + shares × price) from the trade to the next day's close | same |
 | **Costs** | 0.1% transaction cost on every trade | same |
 | **Start** | $10,000 cash, no shares | same |
+
+### Environment fixes
+
+Two bugs in the original environment were fixed in September 2026. Both are covered by the tests in
+`tests/`.
+
+1. **The agent could not see its own position.** The whole observation, including the cash and shares
+   columns, was min-max normalised over the 30-day window. Cash and shares are the same on every row of
+   the window, so they always became 0: the agent chose to buy or sell without knowing what it held.
+   Only the market columns are normalised over the window now; the portfolio state is kept as
+   `cash / initial balance` and `shares / max shares`.
+2. **The reward was one step late.** The portfolio was valued at the price of the trade, so the reward
+   of a step was the price move of the day before, which the agent had already seen. It is now valued
+   at the next day's close, so each reward is the result of the position just taken.
+
+`DiscreteTradingEnvironment(df, legacy=True)` (and the continuous one) reproduces the original
+behaviour. It is only used by `evaluate_saved_models.py`, to evaluate the saved agents in the
+environment they were trained in.
 
 ## Agents
 
@@ -71,6 +94,8 @@ volatility**, and plots the distribution of actions.
 All agents were trained on 2013-2022 and evaluated once, deterministically, on unseen data
 (14 Feb 2023 to 31 Dec 2024, after the 30-day observation window), starting with $10,000.
 Reproduce with `python evaluate_saved_models.py` (about 1 minute on CPU, no download needed).
+These agents were trained in the original environment (before the [fixes](#environment-fixes)) and are
+evaluated in it (`legacy=True`), which reproduces the numbers below exactly.
 
 | Strategy | Return | Sharpe (annualised) | Max drawdown | Volatility |
 |---|---:|---:|---:|---:|
@@ -112,14 +137,16 @@ source .venv/bin/activate          # Windows: .venv\Scripts\activate
 pip install -r requirements.txt
 
 python evaluate_saved_models.py    # reproduce the results table from the saved models
+pytest                             # unit tests of the trading environments
 
 python stock_analysis.py           # 1. (optional) re-download data and rebuild train/test sets
-python test_trading_env.py         # 2. sanity-check both environments with random actions
+python demo_trading_env.py         # 2. run both environments with random actions
 python train_ppo_agent.py          # 3. train and evaluate an agent (or any other train_*.py)
 ```
 
 Training length is set in each script (10,000 to 100,000 timesteps). TensorBoard logs are written to
-`logs/` (the logs of the original May 2025 runs are included):
+`logs/` (the logs of the original May 2025 runs are included). The PPO, DQN and SAC scripts save the
+`VecNormalize` statistics (`vec_normalize.pkl`; for PPO, next to the model) and use them at evaluation time:
 
 ```bash
 tensorboard --logdir logs
@@ -135,7 +162,8 @@ logs/                      TensorBoard logs and evaluation log of the original t
 results/                   test metrics and figures
 stock_analysis.py          data download, indicators, train/test split
 trading_environments.py    discrete and continuous Gymnasium environments
-test_trading_env.py        random-action checks of both environments
+demo_trading_env.py        random-action run of both environments
+tests/                     unit tests of the environments (run with pytest, also on GitHub Actions)
 train_ppo_agent.py         Recurrent PPO (LSTM)
 ppotrading_final.py        Recurrent PPO, final training and evaluation run
 train_a2c_lstm_agent.py    A2C with LSTM feature extractor
@@ -160,7 +188,9 @@ rewarding paths and adapt in real time.
 - **Unstable evaluation.** Evaluation profit varies strongly between training checkpoints (see the
   results section and the notebook), so the agents are not ready for any real use.
 - **Normalisation statistics not saved.** The `VecNormalize` statistics of the original runs were not
-  saved, so the saved models are evaluated as described above.
+  saved, so the saved models are evaluated as described above. The training scripts now save them.
+- **Saved agents predate the environment fixes.** They were trained without seeing their own position
+  and with a one-step-late reward. Retraining in the fixed environment is the next step.
 - **Simplified market.** Orders fill at the closing price with a flat 0.1% cost. There is no slippage,
   no market impact and no short selling.
 

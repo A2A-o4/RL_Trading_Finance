@@ -11,7 +11,7 @@ class CustomTradingEnvironment(gym.Env, ABC):
     Inherits from gym.Env and ABC (Abstract Base Class).
     """
     
-    def __init__(self, df, window_size=30, initial_balance=10000, max_shares=1000):
+    def __init__(self, df, window_size=30, initial_balance=10000, max_shares=1000, legacy=False):
         """
         Initialize the trading environment.
         
@@ -20,8 +20,13 @@ class CustomTradingEnvironment(gym.Env, ABC):
             window_size (int): Size of the observation window
             initial_balance (float): Initial cash balance
             max_shares (int): Maximum number of shares that can be held
+            legacy (bool): Reproduce the original (May 2025) environment, in which the portfolio
+                state was always 0 in the observation and the portfolio was valued at the trade
+                price. Only needed to evaluate the models saved in models/. Keep False for training.
         """
         super(CustomTradingEnvironment, self).__init__()
+        
+        self.legacy = legacy
         
         # Store the dataframe
         self.df = df
@@ -61,13 +66,36 @@ class CustomTradingEnvironment(gym.Env, ABC):
             dtype=np.float32
         )
     
-    @abstractmethod
     def _get_observation(self):
         """
-        Return the current observation.
-        This should be implemented by subclasses.
+        Get the current observation: the last window_size rows of price and indicator data,
+        plus the portfolio state (cash balance and shares held) repeated on every row.
+        
+        The market columns are min-max normalised over the window. The portfolio state is
+        already scaled (cash / initial balance, shares / max shares) and is NOT normalised over
+        the window: it is constant across the window, so window normalisation would turn it into
+        0 and hide the agent's own position from it.
+        
+        Returns:
+            np.array: The current observation, shape (window_size, num_features)
         """
-        pass
+        start_idx = self.current_step - self.window_size
+        end_idx = self.current_step
+        window_data = self.df.iloc[start_idx:end_idx].values
+        
+        portfolio_state = np.tile(
+            [self.cash_balance / self.initial_balance, self.shares_held / self.max_shares],
+            (self.window_size, 1)
+        )
+        
+        if self.legacy:
+            # Original behaviour: the portfolio state is normalised with the window, which makes it 0
+            observation = np.column_stack((window_data, portfolio_state))
+            return self._normalize_observation(observation).astype(np.float32)
+        
+        return np.column_stack(
+            (self._normalize_observation(window_data), portfolio_state)
+        ).astype(np.float32)
     
     @abstractmethod
     def step(self, action):
@@ -192,12 +220,13 @@ class DiscreteTradingEnvironment(CustomTradingEnvironment):
     Trading environment with discrete actions (Hold, Buy, Sell).
     """
     
-    def __init__(self, df, window_size=30, initial_balance=10000, max_shares=1000):
+    def __init__(self, df, window_size=30, initial_balance=10000, max_shares=1000, legacy=False):
         super(DiscreteTradingEnvironment, self).__init__(
             df=df,
             window_size=window_size,
             initial_balance=initial_balance,
-            max_shares=max_shares
+            max_shares=max_shares,
+            legacy=legacy
         )
         
         # Define action space: 0=Hold, 1=Buy, 2=Sell
@@ -205,35 +234,6 @@ class DiscreteTradingEnvironment(CustomTradingEnvironment):
         
         # Fixed trade size
         self.trade_size = 10  # Buy/sell 10 shares at a time
-    
-    def _get_observation(self):
-        """
-        Get current observation of window_size steps and portfolio state.
-        
-        Returns:
-            np.array: The current observation
-        """
-        # Get the window of data
-        start_idx = self.current_step - self.window_size
-        end_idx = self.current_step
-        
-        # Get the window of price and indicator data
-        window_data = self.df.iloc[start_idx:end_idx].values
-        
-        # Get the current price
-        current_price = self.df.iloc[self.current_step - 1]['Close']
-        
-        # Add portfolio state (cash balance and shares held) to each timestep
-        portfolio_state = np.array([
-            [self.cash_balance / self.initial_balance, self.shares_held / self.max_shares] 
-            for _ in range(self.window_size)
-        ])
-        
-        # Combine price/indicator data with portfolio state
-        observation = np.column_stack((window_data, portfolio_state))
-        
-        # Normalize the observation
-        return self._normalize_observation(observation).astype(np.float32)
     
     def step(self, action):
         """
@@ -285,8 +285,16 @@ class DiscreteTradingEnvironment(CustomTradingEnvironment):
         # Move to next timestep
         self.current_step += 1
         
+        # Value the portfolio at the next close, so the reward of this step is the result of the
+        # position just taken (trade at the last observed close, then the market moves one day).
+        # The legacy environment valued it at the trade price, which delayed the reward by a step.
+        if self.legacy:
+            valuation_price = current_price
+        else:
+            valuation_price = self.df.iloc[self.current_step - 1]['Close']
+        
         # Calculate new total assets and update history
-        self.total_assets = self.cash_balance + self.shares_held * current_price
+        self.total_assets = self.cash_balance + self.shares_held * valuation_price
         
         self.history['cash'].append(self.cash_balance)
         self.history['shares'].append(self.shares_held)
@@ -318,6 +326,7 @@ class DiscreteTradingEnvironment(CustomTradingEnvironment):
             'shares_held': self.shares_held,
             'total_assets': self.total_assets,
             'current_price': current_price,
+            'valuation_price': valuation_price,
             'action': ['Hold', 'Buy', 'Sell'][action]
         }
         
@@ -387,45 +396,17 @@ class ContinuousTradingEnvironment(CustomTradingEnvironment):
     Values in between correspond to using that percentage of cash/shares.
     """
     
-    def __init__(self, df, window_size=30, initial_balance=10000, max_shares=1000):
+    def __init__(self, df, window_size=30, initial_balance=10000, max_shares=1000, legacy=False):
         super(ContinuousTradingEnvironment, self).__init__(
             df=df,
             window_size=window_size,
             initial_balance=initial_balance,
-            max_shares=max_shares
+            max_shares=max_shares,
+            legacy=legacy
         )
         
         # Define action space: -1 to 1 for sell and buy percentages
         self.action_space = spaces.Box(low=-1, high=1, shape=(1,), dtype=np.float32)
-    
-    def _get_observation(self):
-        """
-        Get current observation of window_size steps and portfolio state.
-        
-        Returns:
-            np.array: The current observation
-        """
-        # Get the window of data
-        start_idx = self.current_step - self.window_size
-        end_idx = self.current_step
-        
-        # Get the window of price and indicator data
-        window_data = self.df.iloc[start_idx:end_idx].values
-        
-        # Get the current price
-        current_price = self.df.iloc[self.current_step - 1]['Close']
-        
-        # Add portfolio state (cash balance and shares held) to each timestep
-        portfolio_state = np.array([
-            [self.cash_balance / self.initial_balance, self.shares_held / self.max_shares] 
-            for _ in range(self.window_size)
-        ])
-        
-        # Combine price/indicator data with portfolio state
-        observation = np.column_stack((window_data, portfolio_state))
-        
-        # Normalize the observation
-        return self._normalize_observation(observation).astype(np.float32)
     
     def step(self, action):
         """
@@ -477,8 +458,16 @@ class ContinuousTradingEnvironment(CustomTradingEnvironment):
         # Move to next timestep
         self.current_step += 1
         
+        # Value the portfolio at the next close, so the reward of this step is the result of the
+        # position just taken (trade at the last observed close, then the market moves one day).
+        # The legacy environment valued it at the trade price, which delayed the reward by a step.
+        if self.legacy:
+            valuation_price = current_price
+        else:
+            valuation_price = self.df.iloc[self.current_step - 1]['Close']
+        
         # Calculate new total assets and update history
-        self.total_assets = self.cash_balance + self.shares_held * current_price
+        self.total_assets = self.cash_balance + self.shares_held * valuation_price
         
         self.history['cash'].append(self.cash_balance)
         self.history['shares'].append(self.shares_held)
@@ -510,6 +499,7 @@ class ContinuousTradingEnvironment(CustomTradingEnvironment):
             'shares_held': self.shares_held,
             'total_assets': self.total_assets,
             'current_price': current_price,
+            'valuation_price': valuation_price,
             'action': action
         }
         

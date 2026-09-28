@@ -82,7 +82,9 @@ def train_model(env, total_timesteps=100000, save_path="models/recurrent_ppo"):
 
     os.makedirs(save_path, exist_ok=True)
     model.save(f"{save_path}/final_model")
+    env.save(f"{save_path}/vec_normalize.pkl")
     print(f"Model saved to {save_path}/final_model")
+    print(f"Normalization statistics saved to {save_path}/vec_normalize.pkl")
     return model
 
 
@@ -90,7 +92,8 @@ def compute_metrics(portfolio_values):
     returns = np.diff(portfolio_values) / portfolio_values[:-1]
     cumulative_return = (portfolio_values[-1] / portfolio_values[0]) - 1
     sharpe_ratio = np.mean(returns) / (np.std(returns) + 1e-8) * np.sqrt(252)
-    max_drawdown = np.max(np.maximum.accumulate(portfolio_values) - portfolio_values)
+    peak = np.maximum.accumulate(portfolio_values)
+    max_drawdown = np.max((peak - portfolio_values) / peak)  # fraction of the peak, not dollars
     volatility = np.std(returns) * np.sqrt(252)
     return {
         'Sharpe Ratio': sharpe_ratio,
@@ -100,10 +103,14 @@ def compute_metrics(portfolio_values):
     }
 
 
-def evaluate_model(model, test_data_path, episodes=3):
+def evaluate_model(model, test_data_path, episodes=3, vec_normalize=None):
     print(f"Evaluating model on test data ({test_data_path})...")
     test_df = pd.read_csv(test_data_path, index_col=0, parse_dates=True)
+    # Normalise test observations with the frozen training statistics, as seen during training
     test_env = DiscreteTradingEnvironment(test_df)
+    if vec_normalize is not None:
+        vec_normalize.training = False
+        vec_normalize.norm_reward = False
 
     episode_rewards = []
     episode_lengths = []
@@ -121,8 +128,9 @@ def evaluate_model(model, test_data_path, episodes=3):
         actions_taken = []
 
         while not done:
+            model_obs = vec_normalize.normalize_obs(obs) if vec_normalize is not None else obs
             action, lstm_states = model.predict(
-                obs,
+                model_obs,
                 state=lstm_states,
                 episode_start=episode_starts,
                 deterministic=True
@@ -213,7 +221,7 @@ if __name__ == "__main__":
     model = train_model(env, total_timesteps=100000)
 
     print("Evaluating model on test data...")
-    eval_results = evaluate_model(model, test_data_path, episodes=3)
+    eval_results = evaluate_model(model, test_data_path, episodes=3, vec_normalize=env)
 
     print("\nTraining and evaluation complete!")
     print(f"Average reward on test set: {eval_results['avg_reward']:.2f}")

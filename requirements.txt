@@ -1,12 +1,15 @@
-yfinance
-pandas
-numpy
-matplotlib
-seaborn
-scikit-learn
-finrl
-stockstats
-gymnasium
-stable-baselines3
-sb3_contrib
-torch 
+# Tested with Python 3.11 and: pandas 3.0, numpy 2.4, gymnasium 1.3, stable-baselines3 2.9,
+# sb3-contrib 2.9, torch 2.14, tensorboard 2.21, stockstats 0.6.
+# Upper bounds stop a future major release from silently breaking the saved models.
+yfinance>=0.2.40
+pandas>=2.0,<4.0
+numpy>=1.26,<3.0
+matplotlib>=3.8,<4.0
+seaborn>=0.13,<1.0
+stockstats>=0.6,<1.0
+gymnasium>=1.0,<2.0
+stable-baselines3>=2.3,<3.0
+sb3-contrib>=2.3,<3.0
+torch>=2.2,<3.0
+tensorboard>=2.15,<3.0
+pytest>=8.0

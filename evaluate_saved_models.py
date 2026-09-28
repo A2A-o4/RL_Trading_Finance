@@ -7,9 +7,12 @@ The models in models/ were trained on train_data.csv (2013-2022) behind a VecNor
 statistics were not saved. Observations are therefore evaluated two ways:
   raw   - unnormalised observations, exactly as evaluate_model() in train_ppo_agent.py does
   norm  - observations normalised with mean/std recomputed on the training data
+The models were trained in the original environment, which had two bugs since fixed in
+trading_environments.py (portfolio state always 0 in the observation, reward one step late). They
+are evaluated here with legacy=True, i.e. in the environment they were trained in.
 Results go to results/test_metrics.csv and results/*.png.
 """
-import json
+from functools import partial
 import warnings
 from pathlib import Path
 
@@ -24,6 +27,9 @@ from sb3_contrib import RecurrentPPO  # noqa: E402
 from stable_baselines3 import DQN  # noqa: E402
 
 from trading_environments import DiscreteTradingEnvironment  # noqa: E402
+
+# The saved models were trained in the original environment: evaluate them in it.
+LegacyEnv = partial(DiscreteTradingEnvironment, legacy=True)
 
 OUT = Path("results"); OUT.mkdir(exist_ok=True)
 train_df = pd.read_csv("train_data.csv", index_col=0, parse_dates=True)
@@ -44,7 +50,7 @@ def metrics(values: np.ndarray) -> dict:
 
 def obs_stats() -> tuple:
     """Mean / std of observations along the training data (random actions), like VecNormalize."""
-    env, rng, obs_all = DiscreteTradingEnvironment(train_df), np.random.default_rng(0), []
+    env, rng, obs_all = LegacyEnv(train_df), np.random.default_rng(0), []
     obs, _ = env.reset()
     done = False
     while not done:
@@ -59,7 +65,7 @@ MEAN, STD = obs_stats()
 
 
 def run(model, mode: str, recurrent: bool) -> tuple:
-    env = DiscreteTradingEnvironment(test_df)
+    env = LegacyEnv(test_df)
     obs, _ = env.reset()
     state, start, done, actions = None, np.ones((1,), dtype=bool), False, []
     while not done:
@@ -76,7 +82,7 @@ def run(model, mode: str, recurrent: bool) -> tuple:
 
 
 def buy_and_hold() -> np.ndarray:
-    env = DiscreteTradingEnvironment(test_df)
+    env = LegacyEnv(test_df)
     env.reset()
     env.trade_size = 10_000          # buy as many shares as possible on day 1, then hold
     env.step(1)
@@ -88,7 +94,7 @@ def buy_and_hold() -> np.ndarray:
 
 
 def random_policy(seed: int) -> np.ndarray:
-    env, rng = DiscreteTradingEnvironment(test_df), np.random.default_rng(seed)
+    env, rng = LegacyEnv(test_df), np.random.default_rng(seed)
     env.reset()
     done = False
     while not done:
@@ -128,7 +134,7 @@ res.to_csv(OUT / "test_metrics.csv", index=False)
 pd.set_option("display.width", 200)
 print(res.round(3).to_string(index=False))
 
-dates = test_df.index[DiscreteTradingEnvironment(test_df).window_size - 1:]
+dates = test_df.index[LegacyEnv(test_df).window_size - 1:]
 plt.figure(figsize=(11, 5))
 SHOWN = {"Buy & hold AAPL": ("#888888", "--"), "Recurrent PPO (final) [raw]": ("#1A7A8A", "-"),
          "DQN (best checkpoint) [norm]": ("#C0392B", "-")}
