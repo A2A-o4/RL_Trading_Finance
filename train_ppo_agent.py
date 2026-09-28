@@ -117,12 +117,14 @@ def train_model(env, total_timesteps=100000, save_path="models/recurrent_ppo"):
     # Save the final model
     os.makedirs(save_path, exist_ok=True)
     model.save(f"{save_path}/final_model")
+    env.save(f"{save_path}/vec_normalize.pkl")
     print(f"Model saved to {save_path}/final_model")
+    print(f"Normalization statistics saved to {save_path}/vec_normalize.pkl")
     
     return model
 
 
-def evaluate_model(model, test_data_path, episodes=3):
+def evaluate_model(model, test_data_path, episodes=3, vec_normalize=None):
     """
     Evaluate a trained model on test data
     
@@ -130,6 +132,8 @@ def evaluate_model(model, test_data_path, episodes=3):
         model: Trained model
         test_data_path: Path to test data CSV
         episodes: Number of evaluation episodes
+        vec_normalize: VecNormalize wrapper the model was trained with. Its statistics are used to
+            normalise the test observations the same way as during training.
         
     Returns:
         dict: Performance metrics
@@ -139,8 +143,12 @@ def evaluate_model(model, test_data_path, episodes=3):
     # Load test data
     test_df = pd.read_csv(test_data_path, index_col=0, parse_dates=True)
     
-    # Create test environment (not normalized for evaluation)
+    # Create test environment. The model was trained on observations normalised by VecNormalize,
+    # so the test observations are normalised with the same (frozen) statistics before predict().
     test_env = DiscreteTradingEnvironment(test_df)
+    if vec_normalize is not None:
+        vec_normalize.training = False
+        vec_normalize.norm_reward = False
     
     # Storage for results
     episode_rewards = []
@@ -162,8 +170,9 @@ def evaluate_model(model, test_data_path, episodes=3):
         
         while not done:
             # Get model's action
+            model_obs = vec_normalize.normalize_obs(obs) if vec_normalize is not None else obs
             action, lstm_states = model.predict(
-                obs,
+                model_obs,
                 state=lstm_states,
                 episode_start=episode_starts,
                 deterministic=True
@@ -247,7 +256,7 @@ if __name__ == "__main__":
     
     # Evaluate on test data
     print("Evaluating model on test data...")
-    eval_results = evaluate_model(model, test_data_path, episodes=3)
+    eval_results = evaluate_model(model, test_data_path, episodes=3, vec_normalize=env)
     
     print("Training and evaluation complete!")
     print(f"Average reward on test set: {eval_results['avg_reward']:.2f}")
